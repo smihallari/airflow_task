@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Environment Variables
+.env
+
+# Airflow specific
+logs/
+
+# MAC
+.DS_Store
