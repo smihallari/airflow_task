@@ -1,0 +1,18 @@
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [
+    ".git",
+    "__pycache__",
+    "minio_data",
+    "postgres_data",
+    "logs",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
