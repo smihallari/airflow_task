@@ -7,7 +7,7 @@ import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 
-from utils.aws import get_s3_client
+from lib.utils.aws import get_s3_client
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 logger = logging.getLogger(__name__)

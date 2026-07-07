@@ -1,9 +1,9 @@
 import os
 from urllib.parse import parse_qs, urlparse
-
+import dotenv
 import boto3
 
-
+dotenv.load_dotenv()
 def get_s3_client():
     conn_uri = os.getenv("AIRFLOW_CONN_AWS_S3")
     if not conn_uri:
