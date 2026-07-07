@@ -151,7 +151,9 @@ def cheminformatics_pipeline():
                 scan.set_scan_definition_name(f"DQ Check for {props_key}")
                 scan.set_data_source_name("minio_pandas")
 
-                scan.add_pandas_dataframe(dataset_name="properties", pandas_df=df,data_source_name="minio_pandas")
+                scan.add_pandas_dataframe(
+                    dataset_name="properties", pandas_df=df, data_source_name="minio_pandas"
+                )
 
                 scan.add_sodacl_yaml_file("/opt/airflow/dags/soda/dq_check.yml")
 
