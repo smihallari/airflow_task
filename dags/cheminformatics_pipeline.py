@@ -1,20 +1,74 @@
+import io
 import os
 from datetime import datetime, timedelta
 
+import pandas as pd
+import requests
 from airflow.decorators import dag, task
 from airflow.exceptions import AirflowSkipException
 from airflow.models.param import Param
 from airflow.operators.bash import BashOperator
-
 from lib.utils.aws import get_s3_client
+from soda.scan import Scan
+
+
+def notify_teams(context):
+    webhook_url = os.getenv("AIRFLOW_CONN_MSTEAMS_WEBHOOK")
+    if not webhook_url:
+        return
+
+    task_instance = context.get("task_instance")
+    task_id = task_instance.task_id if task_instance else "Unknown Task"
+    exception = context.get("exception", "No exception details provided.")
+
+    adaptive_card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.2",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": f"Pipeline Failure: {task_id}",
+                "style": "heading",
+                "size": "Large",
+                "weight": "bolder",
+                "wrap": True,
+                "color": "attention",
+            },
+            {
+                "type": "TextBlock",
+                "text": f"Exception:\n\n{str(exception)}",
+                "weight": "default",
+                "wrap": True,
+            },
+        ],
+    }
+
+    payload = {
+        "type": "message",
+        "attachments": [
+            {"contentType": "application/vnd.microsoft.card.adaptive", "content": adaptive_card}
+        ],
+    }
+
+    try:
+        requests.post(webhook_url, json=payload, headers={"Content-Type": "application/json"})
+    except Exception as e:
+        print(f"Failed to send Teams notification: {e}")
+
 
 @dag(
-    schedule="@weekly",  # Step 2: Weekly schedule
-    start_date=datetime(2026, 6, 6),
+    schedule="@weekly",
+    start_date=datetime(2023, 1, 1),
     catchup=False,
+    on_failure_callback=notify_teams,
     params={
-        "dataset_id": Param("", type="string", description="Specific Dataset ID (leave blank for all)"),
-        "overwrite": Param(False, type="boolean", description="Step 2: Overwrite all existing files"),
+        "dataset_id": Param(
+            "", type="string", description="Specific Dataset ID (leave blank for all)"
+        ),
+        "overwrite": Param(
+            False, type="boolean", description="Step 2: Overwrite all existing files"
+        ),
     },
     default_args={"retries": 1, "retry_delay": timedelta(minutes=1)},
     tags=["cheminformatics"],
@@ -26,7 +80,6 @@ def cheminformatics_pipeline():
         params = context["params"]
         target_id = params.get("dataset_id", "").strip()
         overwrite = params.get("overwrite", False)
-        
         last_launch = context["data_interval_start"]
 
         s3 = get_s3_client()
@@ -38,13 +91,11 @@ def cheminformatics_pipeline():
         except Exception:
             raise AirflowSkipException("Could not read bucket or bucket is empty.")
 
-        scaffolds = {}
-        r_groups = {}
+        scaffolds, r_groups = {}, {}
 
         for obj in objects:
             key = obj["Key"]
             last_modified = obj["LastModified"]
-            
             if key.endswith("_scaffolds.csv"):
                 scaffolds[key.replace("_scaffolds.csv", "")] = last_modified
             elif key.endswith("_r_groups.csv"):
@@ -53,18 +104,16 @@ def cheminformatics_pipeline():
         env_maps = []
         for base_id, scaffold_modified in scaffolds.items():
             if base_id not in r_groups:
-                continue  # Skip if missing r_groups pair
+                continue
 
             if target_id and base_id != target_id:
-                continue  # Filter by specific ID
+                continue
 
-            # If overwrite is False, ONLY process files that appeared since the last launch
             if not overwrite:
                 rgroup_modified = r_groups[base_id]
                 if scaffold_modified < last_launch and rgroup_modified < last_launch:
                     continue
 
-            # Map arguments for BashOperator
             env_maps.append(
                 {
                     "BUCKET": bucket,
@@ -82,6 +131,38 @@ def cheminformatics_pipeline():
             raise AirflowSkipException("No new datasets require processing.")
 
         return env_maps
+
+    @task(on_success_callback=notify_teams, on_failure_callback=notify_teams)
+    def soda_data_quality_check(env_maps):
+
+        s3 = get_s3_client()
+
+        for env in env_maps:
+            bucket = env["BUCKET"]
+            props_key = env["PROPS_KEY"]
+
+            try:
+                response = s3.get_object(Bucket=bucket, Key=props_key)
+                csv_bytes = response["Body"].read()
+
+                df = pd.read_csv(io.BytesIO(csv_bytes))
+
+                scan = Scan()
+                scan.set_scan_definition_name(f"DQ Check for {props_key}")
+                scan.set_data_source_name("minio_pandas")
+
+                scan.add_pandas_dataframe(dataset_name="properties", pandas_df=df,data_source_name="minio_pandas")
+
+                scan.add_sodacl_yaml_file("/opt/airflow/dags/soda/dq_check.yml")
+
+                scan.execute()
+
+                if scan.has_check_fails():
+                    print(scan.get_logs_text())
+                    raise ValueError(f"Soda DQ Failed for {props_key}. See logs for details.")
+
+            except Exception as e:
+                raise ValueError(f"DQ task crashed on {props_key}: {str(e)}")
 
     env_maps = find_and_filter_datasets()
 
@@ -105,6 +186,8 @@ def cheminformatics_pipeline():
         bash_command="PYTHONPATH=/opt/airflow/dags python /opt/airflow/dags/lib/tasks/build_faerun_graph.py --bucket $BUCKET --input-key $PROPS_KEY --output-key $GRAPH_KEY",
     ).expand(env=env_maps)
 
-    generate >> calculate >> cluster >> graph
+    dq_check = soda_data_quality_check(env_maps)
+    generate >> calculate >> cluster >> graph >> dq_check
+
 
 cheminformatics_pipeline()
