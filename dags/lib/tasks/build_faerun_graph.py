@@ -14,7 +14,7 @@ from faerun import Faerun
 from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem
 
-from utils.aws import get_s3_client
+from lib.utils.aws import get_s3_client
 
 RDLogger.DisableLog("rdApp.warning")
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
