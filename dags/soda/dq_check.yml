@@ -1,0 +1,13 @@
+checks for properties:
+  - row_count > 0
+  - missing_count(smiles) = 0
+  
+  # Chemical reality checks
+  - min(mol_weight) >= 0
+  - max(hba) <= 20
+  - max(hbd) <= 20
+  
+  - schema:
+      name: Confirm generated columns
+      warn:
+        when required column missing: [smiles, mol_weight, log_p, hba, hbd, lipinski_pass]
